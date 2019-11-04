@@ -1,0 +1,87 @@
+1.在 ASA  上配置 IKEv1
+ciscoasa(config)# crypto ikev1 policy 1
+ciscoasa(config-isakmp-policy)# encryption 3des
+ciscoasa(config-isakmp-policy)# hash sha
+ciscoasa(config-isakmp-policy)# authentication pre-share
+ciscoasa(config-isakmp-policy)# group 2
+ciscoasa(config-isakmp-policy)# exit
+
+说明： 定义了 ikev1 policy 1，加密方式为 3des，hash 算法为 sha，认证方式为
+Pre-Shared Keys (PSK)，密钥算法（Diffie-Hellman）为 group 2。
+
+2.在 ASA 上定义认证标识：
+ciscoasa(config)# tunnel-group 12.1.1.1 type ipsec-l2l
+ciscoasa(config)# tunnel-group 12.1.1.1 ipsec-attributes
+ciscoasa(config-tunnel-ipsec)# ikev1 pre-shared-key cisco123
+ciscoasa(config-tunnel-ipsec)# exit
+
+说明： 因为之前定义的认证方式为 Pre-Shared Keys (PSK)，所以需要定义认证密码，
+这里定义与 peer 12.1.1.1，即与 R1 的认证密码为 cisco123，并且双方密码必须一致，
+否则无法建立 IKE SA。
+
+3.在 ASA  上配置 IPsec transform
+ciscoasa(config)#  crypto ipsec ikev1 transform-set ccie esp-3des esp-sha-hmac
+
+说明： 配置了 transform-set 为 ccie，其中数据封装使用 esp 加 3des 加密，并且
+使用 esp 结合 sha 做 hash 计算
+
+4.在 ASA  上定义感兴趣流量:
+ciscoasa(config)# access-list vpn permit ip 192.168.1.0 255.255.255.0 10.1.1.0 255.255.255.0
+
+说明： 这里需要被 IPsec 保护传输的流量为北京公司至上海公司的流量，即
+192.168.1.0/24 发往 10.1.1.0/24 的流量，切记不可使用 any 来表示地址。
+
+5.在 ASA  上创建 crypto map:
+ciscoasa(config)# crypto map l2l 1 match address vpn
+ciscoasa(config)# crypto map l2l 1 set peer 12.1.1.1
+ciscoasa(config)# crypto map l2l 1 set ikev1 transform-set ccie
+
+说明： 在 ASA 上配置 crypto map 为 l2l，序号为 1，即第 1 组策略，其中指定加
+密数据发往的对端为 12.1.1.1，即和 12.1.1.1 建立 IPsec 隧道，调用的 IPsec transform
+为 ccie，并且指定 ACL vpn 中的流量为被保护的流量。
+
+6.在 ASA  上将 crypto map 和 和 ISAKMP  策略应用于接口 outside  接口 E0/1 :
+ciscoasa(config)# crypto map l2l interface outside
+ciscoasa(config)# crypto ikev1 enable outside
+
+说明： 将 crypto map 和 ikev1 策略应用在去往上海公司的接口 E1 上。
+
+路由器配置：
+r1(config)#crypto isakmp policy 1
+r1(config-isakmp)#encryption 3des
+r1(config-isakmp)#hash sha
+r1(config-isakmp)#authentication pre-share
+r1(config-isakmp)#group 2
+r1(config-isakmp)#exit
+r1(config)#crypto isakmp key 0 cisco123 address 23.1.1.3
+r1(config)#crypto ipsec transform-set ccie esp-3des esp-sha-hmac
+r1(cfg-crypto-trans)#exit
+r1(config)#access-list 100 permit ip 10.1.1.0 0.0.0.255 192.168.1.0 0.0.0.255
+r1(config)#crypto map l2l 1 ipsec-isakmp
+r1(config-crypto-map)#set peer 23.1.1.3
+r1(config-crypto-map)#set transform-set ccie
+r1(config-crypto-map)#match address 100
+r1(config-crypto-map)#exit
+r1(config)#int f0/0
+r1(config-if)#crypto map l2l
+r1(config-if)#exit
+
+
+7.测试 NAT  对 LAN-to-LAN VPN  的影响：
+（1 ）在 ASA  上配置 NAT ：
+ciscoasa(config)# global (outside) 1 interface
+INFO: outside interface address added to PAT pool
+ciscoasa(config)# nat (inside) 1 0.0.0.0 0.0.0.0
+
+说明： 在北京公司防火墙 ASA 上开启 NAT，并且将所有内网流量通过 NAT 将源
+IP 转换为外网接口 E0/1（即 outside 口）的地址。
+
+经测试，流量无法到达
+
+（2） 配置 ASA  使北京公司到上海公司的流量绕过 NAT ：
+ciscoasa(config)#access-list nonat extended permit ip 192.168.1.0 255.255.255.0
+10.1.1.0 255.255.255.0
+ciscoasa(config)# nat (inside) 0 access-list nonat
+ciscoasa(config)#
+说明： 在 NAT 进程 0 的流量则不被 NAT 转换，所以北京公司到上海公司的流量
+不被 NAT 转换。
